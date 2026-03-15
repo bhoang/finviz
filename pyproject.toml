@@ -55,6 +55,9 @@ Repository = "https://github.com/mariostoev/finviz.git"
 Issues = "https://github.com/mariostoev/finviz/issues"
 Changelog = "https://github.com/mariostoev/finviz/blob/main/CHANGELOG.md"
 
+[project.scripts]
+finviz-run-screeners = "finviz.screener_runner:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["finviz*"]

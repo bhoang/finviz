@@ -50,21 +50,30 @@ def http_request_get(
 
 
 @tenacity.retry(wait=tenacity.wait_exponential())
-def finviz_request(url: str, user_agent: str) -> Response:
-    response = requests.get(url, headers={"User-Agent": user_agent})
+def finviz_request(url: str, user_agent: str, session=None) -> Response:
+    if session:
+        response = session.get(url, headers={"User-Agent": user_agent}, verify=False)
+    else:
+        response = requests.get(url, headers={"User-Agent": user_agent})
+
     if response.text == "Too many requests.":
         raise Exception("Too many requests.")
     return response
 
 
 def sequential_data_scrape(
-    scrape_func: Callable, urls: List[str], user_agent: str, *args, **kwargs
+    scrape_func: Callable,
+    urls: List[str],
+    user_agent: str,
+    *args,
+    session=None,
+    **kwargs,
 ) -> List[Dict]:
     data = []
 
     for url in tqdm(urls, disable="DISABLE_TQDM" in os.environ):
         try:
-            response = finviz_request(url, user_agent)
+            response = finviz_request(url, user_agent, session=session)
             kwargs["URL"] = url
             data.append(scrape_func(response, *args, **kwargs))
         except Exception as exc:
@@ -82,13 +91,15 @@ class Connector:
         urls: List[str],
         user_agent: str,
         *args,
-        css_select: bool = False
+        css_select: bool = False,
+        session=None,
     ):
         self.scrape_function = scrape_function
         self.urls = urls
         self.user_agent = user_agent
         self.arguments = args
         self.css_select = css_select
+        self.session = session
         self.data = []
 
     async def __http_request__async(
@@ -124,8 +135,15 @@ class Connector:
         )
         timeout = aiohttp.ClientTimeout(total=connection_settings["CONNECTION_TIMEOUT"])
 
+        cookie_jar = aiohttp.CookieJar()
+        if self.session:
+            cookie_jar.update_cookies(self.session.cookies.get_dict())
+
         async with aiohttp.ClientSession(
-            connector=conn, timeout=timeout, headers={"User-Agent": self.user_agent}
+            connector=conn,
+            timeout=timeout,
+            headers={"User-Agent": self.user_agent},
+            cookie_jar=cookie_jar,
         ) as session:
             for url in self.urls:
                 async_tasks.append(self.__http_request__async(url, session))

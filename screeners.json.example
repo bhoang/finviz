@@ -1,0 +1,17 @@
+{
+  "screeners": [
+    {
+      "name": "large_cap_growth",
+      "url": "https://finviz.com/screener.ashx?v=111&f=cap_largeover,fa_salesqoq_o15&o=-marketcap",
+      "rows": 50
+    },
+    {
+      "name": "sp500_breakouts",
+      "filters": ["idx_sp500", "ta_highlow50d_nh"],
+      "table": "Overview",
+      "order": "-price",
+      "rows": 25,
+      "export_csv": "screeners-output/sp500_breakouts.csv"
+    }
+  ]
+}

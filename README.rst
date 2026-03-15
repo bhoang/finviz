@@ -84,6 +84,27 @@ Quick Start
         print(target['analyst'], target['rating'], target.get('target_to'))
 
 
+Authenticated Sessions
+======================
+
+For logged-in scraping, create an authenticated requests.Session once and
+reuse it across stock and screener calls:
+
+.. code:: python
+
+    import finviz
+
+    session = finviz.get_auth_session("<username-or-email>", "<password>")
+    # or: session = finviz.get_auth_session_from_env()
+
+    stock = finviz.get_stock("AAPL", session=session)
+
+    url = "https://finviz.com/screener.ashx?v=111&f=cap_largeover,exch_nasd&o=-marketcap"
+    stock_list = finviz.Screener.init_from_url(url, session=session)
+
+This keeps the library headless and allows authenticated requests without Selenium.
+
+
 Using Screener
 ==============
 
@@ -135,6 +156,53 @@ The Screener allows you to filter stocks based on various criteria. You can eith
     # Get all available filter options
     filters = Screener.load_filter_dict()
     print(filters.keys())  # ['Exchange', 'Index', 'Sector', 'Industry', ...]
+
+Running Multiple Screeners
+==========================
+
+Define the screeners you want in screeners.json and run them in one pass.
+
+Example config file:
+
+.. code:: json
+
+    {
+      "screeners": [
+        {
+          "name": "large_cap_growth",
+          "url": "https://finviz.com/screener.ashx?v=111&f=cap_largeover,fa_salesqoq_o15&o=-marketcap",
+          "rows": 50
+        },
+        {
+          "name": "sp500_breakouts",
+          "filters": ["idx_sp500", "ta_highlow50d_nh"],
+          "table": "Overview",
+          "order": "-price",
+          "rows": 25
+        }
+      ]
+    }
+
+Run them from Python:
+
+.. code:: python
+
+    import finviz
+
+    results = finviz.run_screeners_from_config(
+        path="screeners.json",
+        auth_from_env=True,
+        export_dir="screeners-output",
+    )
+
+    for name, screener in results.items():
+        print(name, len(screener.data))
+
+Or from the command line:
+
+.. code:: bash
+
+    uv run finviz-run-screeners --config screeners.json --auth-env --export-dir screeners-output
 
 
 Individual Stock Functions

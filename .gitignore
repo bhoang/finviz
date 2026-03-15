@@ -111,3 +111,7 @@ ENV/
 
 # CSV files
 *.csv
+
+# Local screener config
+screeners.json
+screeners-output/

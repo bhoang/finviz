@@ -6,13 +6,15 @@ from urllib.parse import urlencode, urlparse
 import requests
 from lxml import html as lxml_html
 
-from finviz.config import USER_AGENT
 import finviz.helper_functions.scraper_functions as scrape
+from finviz.config import USER_AGENT
 from finviz.helper_functions.display_functions import create_table_string
 from finviz.helper_functions.error_handling import InvalidTableType, NoResults
-from finviz.helper_functions.request_functions import (Connector,
-                                                       http_request_get,
-                                                       sequential_data_scrape)
+from finviz.helper_functions.request_functions import (
+    Connector,
+    http_request_get,
+    sequential_data_scrape,
+)
 from finviz.helper_functions.save_data import export_to_csv, export_to_db
 
 TABLE_TYPES = {
@@ -30,7 +32,14 @@ class Screener(object):
     """ Used to download data from https://www.finviz.com/screener.ashx. """
 
     @classmethod
-    def init_from_url(cls, url, rows=None):
+    def init_from_url(
+        cls,
+        url,
+        rows=None,
+        user_agent=USER_AGENT,
+        request_method="sequential",
+        session=None,
+    ):
         """
         Initializes from url
 
@@ -57,7 +66,18 @@ class Screener(object):
             except KeyError:
                 raise InvalidTableType(split_query["v"][0])
 
-        return cls(tickers, filters, rows, order, signal, table, custom)
+        return cls(
+            tickers=tickers,
+            filters=filters,
+            rows=rows,
+            order=order,
+            signal=signal,
+            table=table,
+            custom=custom,
+            user_agent=user_agent,
+            request_method=request_method,
+            session=session,
+        )
 
     def __init__(
         self,
@@ -70,6 +90,7 @@ class Screener(object):
         custom=None,
         user_agent=USER_AGENT,
         request_method="sequential",
+        session=None,
     ):
         """
         Initializes all variables to its values
@@ -113,9 +134,7 @@ class Screener(object):
             self._table = "152"
             self._custom = custom
 
-            if (
-                "0" not in self._custom
-            ):  # 0 (No.) is required for the sequence algorithm to work
+            if "0" not in self._custom:
                 self._custom = ["0"] + self._custom
 
         self._rows = rows
@@ -123,6 +142,7 @@ class Screener(object):
         self._signal = signal
         self._user_agent = user_agent
         self._request_method = request_method
+        self._session = session
 
         self.analysis = []
         self.data = self.__search_screener()
@@ -136,15 +156,13 @@ class Screener(object):
         signal="",
         table=None,
         custom=None,
+        session=None,
     ):
         """
         Adds more filters to the screener. Example usage:
 
-        stock_list = Screener(filters=['cap_large'])  # All the stocks with large market cap
-        # After analyzing you decide you want to see which of the stocks have high dividend yield
-        # and show their performance:
+        stock_list = Screener(filters=['cap_large'])
         stock_list(filters=['fa_div_high'], table='Performance')
-        # Shows performance of stocks with large market cap and high dividend yield
         """
 
         if tickers:
@@ -167,6 +185,9 @@ class Screener(object):
 
         if custom:
             self._custom = custom
+
+        if session is not None:
+            self._session = session
 
         self.analysis = []
         self.data = self.__search_screener()
@@ -221,36 +242,39 @@ class Screener(object):
             raise InvalidTableType(input_table)
 
     @staticmethod
-    def load_filter_dict(reload=True):
+    def load_filter_dict(
+        reload=True,
+        session=None,
+        user_agent=USER_AGENT,
+        include_elite=False,
+    ):
         """
         Get dict of available filters. File containing json specification of filters will be built if it doesn't exist
         or if reload is False
         """
 
-        # Get location of filter.json
         json_directory = pathlib.Path(__file__).parent
-        json_file = pathlib.Path.joinpath(json_directory, "filters.json")
+        cache_name = "filters_elite.json" if include_elite else "filters.json"
+        json_file = pathlib.Path.joinpath(json_directory, cache_name)
 
-        # Reload the filters JSON file if present and requested
         if reload and json_file.is_file():
             with open(json_file, "r") as fp:
                 return json.load(fp)
 
-        # Get html from main filter page, ft=4 ensures all filters are present
         url = "https://finviz.com/screener.ashx?ft=4"
-        response = requests.get(url, headers={"User-Agent": USER_AGENT}, verify=False)
+        if session:
+            response = session.get(url, headers={"User-Agent": user_agent}, verify=False)
+        else:
+            response = requests.get(url, headers={"User-Agent": user_agent}, verify=False)
         response.raise_for_status()
         html_content = response.text
 
-        # Parse html with lxml and locate the filters table
         tree = lxml_html.fromstring(html_content)
 
-        # Find the table containing "Exchange" text (filters table)
         filters_table = None
         for td in tree.iter("td"):
             text = td.text_content().strip()
             if text == "Exchange":
-                # Walk up to find parent table
                 parent = td.getparent()
                 while parent is not None:
                     if parent.tag == "table":
@@ -262,7 +286,6 @@ class Screener(object):
         if filters_table is None:
             raise Exception("Could not locate filter parameters")
 
-        # Populate dict with filtering options and corresponding filter tags
         filter_dict = {}
         td_list = list(filters_table.iter("td"))
 
@@ -272,29 +295,23 @@ class Screener(object):
             if filter_text == "":
                 continue
 
-            # Odd td elements contain the filter tag and options
             select_elem = td_list[i + 1].find(".//select")
             if select_elem is None:
                 continue
 
             filter_name = select_elem.get("data-filter", "").strip()
 
-            # Store filter options for current filter
             for opt in select_elem.findall("option"):
                 value = opt.get("value", "").strip()
                 text = opt.text_content() if opt.text_content() else ""
 
-                # Filter out unwanted items
-                if not value or "Elite" in text:
+                if not value or (not include_elite and "Elite" in text):
                     continue
 
-                # Make filter string and store in dict
                 current_dict[text] = f"{filter_name}_{value}"
 
-            # Store current filter dict
             filter_dict[filter_text] = current_dict
 
-        # Save filter dict to finviz directory
         try:
             with open(json_file, "w") as fp:
                 json.dump(filter_dict, fp)
@@ -384,6 +401,7 @@ class Screener(object):
                 for row in self.data
             ],
             self._user_agent,
+            session=self._session,
         )
 
     def get_ticker_details(self):
@@ -398,6 +416,7 @@ class Screener(object):
                 for row in self.data
             ],
             self._user_agent,
+            session=self._session,
         )
 
         for entry in ticker_data:
@@ -431,22 +450,17 @@ class Screener(object):
         """ Private function used to return table headers. """
         headers = []
 
-        # Try new structure with <th> elements first
         header_rows = self._page_content.cssselect('tr[valign="middle"]')
         if not header_rows:
             return headers
 
         header_row = header_rows[0]
+        header_elements = header_row.cssselect("th")
 
-        # Try <th> elements first (new structure)
-        header_elements = header_row.cssselect('th')
-
-        # Fallback to <td> elements (old structure)
         if not header_elements:
             header_elements = header_row.xpath("td")
 
         for header_element in header_elements:
-            # Use text_content() to get all text including from nested elements
             header_text = header_element.text_content().strip()
 
             if header_text:
@@ -468,28 +482,32 @@ class Screener(object):
                 "c": ",".join(self._custom),
             },
             user_agent=self._user_agent,
+            session=self._session,
         )
 
         self._rows = self.__check_rows()
         self.headers = self.__get_table_headers()
+        page_urls = scrape.get_page_urls(self._page_content, self._rows, self._url)
 
         if self._request_method == "async":
             async_connector = Connector(
                 scrape.get_table,
-                scrape.get_page_urls(self._page_content, self._rows, self._url),
+                page_urls,
                 self._user_agent,
                 self.headers,
                 self._rows,
                 css_select=True,
+                session=self._session,
             )
             pages_data = async_connector.run_connector()
         else:
             pages_data = sequential_data_scrape(
                 scrape.get_table,
-                scrape.get_page_urls(self._page_content, self._rows, self._url),
+                page_urls,
                 self._user_agent,
                 self.headers,
                 self._rows,
+                session=self._session,
             )
 
         data = []
